@@ -19,6 +19,9 @@ import {
   MapPin,
   CheckCircle2,
   AlertCircle,
+  Pencil,
+  UserX,
+  UserCheck,
 } from 'lucide-react';
 
 type Employee = {
@@ -47,7 +50,7 @@ const emptyForm: EmployeeForm = {
   employeeNumber: '',
   fullName: '',
   designation: '',
-  department: '',
+  department: 'Welfare',
   section: '',
   email: '',
   phone: '',
@@ -57,9 +60,16 @@ export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<EmployeeForm>(emptyForm);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [changingStatusId, setChangingStatusId] = useState<number | null>(null);
+
+  const [canEdit, setCanEdit] = useState(false);
+  const [canManageStatus, setCanManageStatus] = useState(false);
+
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -71,6 +81,7 @@ export default function EmployeesPage() {
       const response = await fetch('/api/employees', {
         cache: 'no-store',
       });
+
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -78,6 +89,8 @@ export default function EmployeesPage() {
       }
 
       setEmployees(data.employees || []);
+      setCanEdit(data.canEdit === true);
+      setCanManageStatus(data.canManageStatus === true);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Could not load employees.',
@@ -113,41 +126,155 @@ export default function EmployeesPage() {
     setForm((previous) => ({ ...previous, [field]: value }));
   }
 
+  function openNewForm() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setMessage('');
+    setError('');
+    setShowForm(true);
+  }
+
+  function openEditForm(employee: Employee) {
+    setEditingId(employee.id);
+
+    setForm({
+      employeeNumber: employee.employeeNumber || '',
+      fullName: employee.fullName || '',
+      designation: employee.designation || '',
+      department: employee.department || 'Welfare',
+      section: employee.section || '',
+      email: employee.email || '',
+      phone: employee.phone || '',
+    });
+
+    setMessage('');
+    setError('');
+    setShowForm(true);
+  }
+
+  function closeForm() {
+    if (saving) return;
+
+    setShowForm(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
   async function saveEmployee(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (saving) return;
+
     setSaving(true);
     setMessage('');
     setError('');
 
     try {
+      const isEditing = editingId !== null;
+
       const response = await fetch('/api/employees', {
-        method: 'POST',
+        method: isEditing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(
+          isEditing
+            ? { id: editingId, ...form }
+            : form,
+        ),
       });
 
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Could not register employee.');
+        throw new Error(
+          data.message ||
+            (isEditing
+              ? 'Could not update employee.'
+              : 'Could not register employee.'),
+        );
       }
 
-      setMessage(data.message || 'Employee registered successfully.');
-      setForm(emptyForm);
+      setMessage(
+        data.message ||
+          (isEditing
+            ? 'Employee updated successfully.'
+            : 'Employee registered successfully.'),
+      );
+
       setShowForm(false);
+      setEditingId(null);
+      setForm(emptyForm);
+
       await loadEmployees();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Could not register employee.',
+        err instanceof Error
+          ? err.message
+          : 'Could not save employee.',
       );
     } finally {
       setSaving(false);
     }
   }
 
+  async function changeEmployeeStatus(employee: Employee) {
+    if (!canManageStatus || changingStatusId !== null) return;
+
+    const newStatus =
+      employee.status === 'active' ? 'inactive' : 'active';
+
+    const actionLabel =
+      newStatus === 'inactive' ? 'deactivate' : 'reactivate';
+
+    const confirmed = window.confirm(
+      newStatus === 'inactive'
+        ? `Are you sure you want to deactivate ${employee.fullName} (${employee.employeeNumber})?\n\nExisting job cards and historical records will be preserved.`
+        : `Are you sure you want to reactivate ${employee.fullName} (${employee.employeeNumber})?`,
+    );
+
+    if (!confirmed) return;
+
+    setChangingStatusId(employee.id);
+    setMessage('');
+    setError('');
+
+    try {
+      const response = await fetch('/api/employees', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: employee.id,
+          action: 'status',
+          status: newStatus,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data.message || `Could not ${actionLabel} employee.`,
+        );
+      }
+
+      setMessage(data.message || `Employee ${actionLabel}d successfully.`);
+
+      await loadEmployees();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : `Could not ${actionLabel} employee.`,
+      );
+    } finally {
+      setChangingStatusId(null);
+    }
+  }
+
   const activeCount = employees.filter(
     (employee) => employee.status === 'active',
   ).length;
+
+  const inactiveCount = employees.length - activeCount;
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -166,25 +293,25 @@ export default function EmployeesPage() {
               <Users size={17} />
               Staff Management
             </div>
+
             <h1 className="text-3xl font-black tracking-tight text-slate-900 sm:text-4xl">
               Employee Directory
             </h1>
+
             <p className="mt-2 text-slate-500">
               Register and manage employees for Welfare Job Cards.
             </p>
           </div>
 
-          <button
-            onClick={() => {
-              setShowForm(true);
-              setMessage('');
-              setError('');
-            }}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 py-3 font-bold text-white shadow-lg shadow-emerald-900/15 transition hover:bg-emerald-800"
-          >
-            <Plus size={19} />
-            Add Employee
-          </button>
+          {canEdit && (
+            <button
+              onClick={openNewForm}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 py-3 font-bold text-white shadow-lg shadow-emerald-900/15 transition hover:bg-emerald-800"
+            >
+              <Plus size={19} />
+              Add Employee
+            </button>
+          )}
         </div>
 
         {message && (
@@ -241,7 +368,7 @@ export default function EmployeesPage() {
               <UserRound className="text-slate-400" size={21} />
             </div>
             <p className="mt-3 text-3xl font-black text-slate-900">
-              {employees.length - activeCount}
+              {inactiveCount}
             </p>
           </div>
         </div>
@@ -296,16 +423,18 @@ export default function EmployeesPage() {
                 <Users size={30} />
               </div>
               <h3 className="text-lg font-bold text-slate-900">
-                {search ? 'No matching employees' : 'No employees registered yet'}
+                {search
+                  ? 'No matching employees'
+                  : 'No employees registered yet'}
               </h3>
               <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
                 {search
                   ? 'Try another name, P/No., designation or department.'
                   : 'Start by registering your first employee. Their details will be available when creating Welfare Job Cards.'}
               </p>
-              {!search && (
+              {!search && canEdit && (
                 <button
-                  onClick={() => setShowForm(true)}
+                  onClick={openNewForm}
                   className="mt-5 inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-800"
                 >
                   <Plus size={18} />
@@ -315,7 +444,7 @@ export default function EmployeesPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[750px] text-left">
+              <table className="w-full min-w-[1050px] text-left">
                 <thead className="bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-500">
                   <tr>
                     <th className="px-6 py-4">Employee</th>
@@ -324,8 +453,12 @@ export default function EmployeesPage() {
                     <th className="px-6 py-4">Department</th>
                     <th className="px-6 py-4">Section</th>
                     <th className="px-6 py-4">Status</th>
+                    {(canEdit || canManageStatus) && (
+                      <th className="px-6 py-4 text-center">Actions</th>
+                    )}
                   </tr>
                 </thead>
+
                 <tbody className="divide-y divide-slate-100">
                   {filteredEmployees.map((employee) => (
                     <tr
@@ -352,18 +485,23 @@ export default function EmployeesPage() {
                           </div>
                         </div>
                       </td>
+
                       <td className="px-6 py-4 text-sm font-semibold text-slate-700">
                         {employee.employeeNumber}
                       </td>
+
                       <td className="px-6 py-4 text-sm text-slate-600">
                         {employee.designation}
                       </td>
+
                       <td className="px-6 py-4 text-sm text-slate-600">
                         {employee.department || '—'}
                       </td>
+
                       <td className="px-6 py-4 text-sm text-slate-600">
                         {employee.section || '—'}
                       </td>
+
                       <td className="px-6 py-4">
                         <span
                           className={`rounded-full px-3 py-1 text-xs font-bold ${
@@ -372,9 +510,66 @@ export default function EmployeesPage() {
                               : 'bg-slate-100 text-slate-500'
                           }`}
                         >
-                          {employee.status === 'active' ? 'Active' : 'Inactive'}
+                          {employee.status === 'active'
+                            ? 'Active'
+                            : 'Inactive'}
                         </span>
                       </td>
+
+                      {(canEdit || canManageStatus) && (
+                        <td className="px-6 py-4">
+                          <div className="flex items-center justify-center gap-2">
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => openEditForm(employee)}
+                                title={`Edit ${employee.fullName}`}
+                                className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
+                              >
+                                <Pencil size={15} />
+                                Edit
+                              </button>
+                            )}
+
+                            {canManageStatus && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void changeEmployeeStatus(employee)
+                                }
+                                disabled={changingStatusId !== null}
+                                title={
+                                  employee.status === 'active'
+                                    ? 'Deactivate employee'
+                                    : 'Reactivate employee'
+                                }
+                                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                  employee.status === 'active'
+                                    ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                }`}
+                              >
+                                {changingStatusId === employee.id ? (
+                                  <RefreshCw
+                                    size={15}
+                                    className="animate-spin"
+                                  />
+                                ) : employee.status === 'active' ? (
+                                  <UserX size={15} />
+                                ) : (
+                                  <UserCheck size={15} />
+                                )}
+
+                                {changingStatusId === employee.id
+                                  ? 'Please wait...'
+                                  : employee.status === 'active'
+                                    ? 'Deactivate'
+                                    : 'Reactivate'}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -394,14 +589,15 @@ export default function EmployeesPage() {
             <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-6 py-5">
               <div>
                 <h2 className="text-xl font-black text-slate-900">
-                  Register Employee
+                  {editingId !== null ? 'Edit Employee' : 'Register Employee'}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
                   Enter the employee&apos;s official details.
                 </p>
               </div>
+
               <button
-                onClick={() => setShowForm(false)}
+                onClick={closeForm}
                 className="rounded-xl p-2 text-slate-500 hover:bg-slate-200"
                 aria-label="Close form"
               >
@@ -417,6 +613,7 @@ export default function EmployeesPage() {
                   </label>
                   <input
                     required
+                    maxLength={50}
                     value={form.employeeNumber}
                     onChange={(event) =>
                       updateField('employeeNumber', event.target.value)
@@ -432,6 +629,7 @@ export default function EmployeesPage() {
                   </label>
                   <input
                     required
+                    maxLength={255}
                     value={form.fullName}
                     onChange={(event) =>
                       updateField('fullName', event.target.value)
@@ -452,6 +650,7 @@ export default function EmployeesPage() {
                     />
                     <input
                       required
+                      maxLength={255}
                       value={form.designation}
                       onChange={(event) =>
                         updateField('designation', event.target.value)
@@ -473,11 +672,8 @@ export default function EmployeesPage() {
                     />
                     <input
                       value={form.department}
-                      onChange={(event) =>
-                        updateField('department', event.target.value)
-                      }
-                      placeholder="Department"
-                      className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+                      readOnly
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-slate-600 outline-none"
                     />
                   </div>
                 </div>
@@ -492,6 +688,7 @@ export default function EmployeesPage() {
                       size={17}
                     />
                     <input
+                      maxLength={255}
                       value={form.section}
                       onChange={(event) =>
                         updateField('section', event.target.value)
@@ -512,6 +709,7 @@ export default function EmployeesPage() {
                       size={17}
                     />
                     <input
+                      maxLength={50}
                       value={form.phone}
                       onChange={(event) =>
                         updateField('phone', event.target.value)
@@ -533,6 +731,7 @@ export default function EmployeesPage() {
                     />
                     <input
                       type="email"
+                      maxLength={255}
                       value={form.email}
                       onChange={(event) =>
                         updateField('email', event.target.value)
@@ -547,18 +746,28 @@ export default function EmployeesPage() {
               <div className="flex flex-col-reverse justify-end gap-3 border-t border-slate-100 pt-5 sm:flex-row">
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={closeForm}
+                  disabled={saving}
                   className="rounded-xl border border-slate-200 px-5 py-3 font-bold text-slate-600 hover:bg-slate-50"
                 >
                   Cancel
                 </button>
+
                 <button
                   type="submit"
                   disabled={saving}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-6 py-3 font-bold text-white shadow-lg shadow-emerald-900/15 transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Save size={18} />
-                  {saving ? 'Saving...' : 'Save Employee'}
+                  {saving ? (
+                    <RefreshCw size={18} className="animate-spin" />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  {saving
+                    ? 'Saving...'
+                    : editingId !== null
+                      ? 'Update Employee'
+                      : 'Save Employee'}
                 </button>
               </div>
             </form>
